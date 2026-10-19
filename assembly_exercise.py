@@ -275,7 +275,6 @@ def test_task3():
     assert spell_path(walk_a) == 'GGTCCAGACTGAA'
 
     graph_b = debruijn_graph(toy_b)
-    print('_________________TASK 3_____________________')
     print('\nToy B - Hierholzer trace:')
     walk_b = eulerian_path(graph_b, verbose=True)
     expected_b = ['GA', 'AT', 'TT', 'TC', 'CG', 'GT', 'TC', 'CC',
@@ -291,9 +290,253 @@ def test_task3():
         check_eulerian_walk(debruijn_graph(kmers), kmers)
 
     print('Toy B genome:', spell_path(walk_b))
-    print('Task 3 tests passed!')
+    print('All Task 3 tests passed!')
+
+
+# Task 4: Repeats and contigs
+#A node is 1-in-1-out if its in-degree and its out-degree are both 1. A path is non-branching if every node inside it (not its first or last node) is 1-in-1-out.
+#It is maximal if it cannot be extended at either end without becoming branching.
+def contigs(graph):
+    incoming, outgoing = in_out_degree(graph)
+    unused = {node: sorted(neighbors) for node, neighbors in graph.items()}
+    result = []
+
+    def one_in_one_out(node):
+        return incoming[node] == 1 and outgoing[node] == 1
+
+    # Start a path at each node that is not 1-in-1-out.
+    for start in sorted(graph):
+        if one_in_one_out(start):
+            continue
+        while unused[start]:
+            node = unused[start].pop(0)
+            path = [start, node]
+            while one_in_one_out(node):
+                next_node = unused[node].pop(0)
+                path.append(next_node)
+                node = next_node
+            result.append(spell_path(path))
+
+
+    for start in sorted(graph):
+        while unused[start]:
+            path = [start]
+            node = start
+            while True:
+                node = unused[node].pop(0)
+                path.append(node)
+                if node == start:
+                    break
+            result.append(spell_path(path))
+
+    return sorted(result)
+
+
+def check_contigs(graph, kmers):
+    original = {node: neighbors.copy() for node, neighbors in graph.items()}
+    pieces = contigs(graph)
+    k = len(kmers[0])
+
+    # Every edge must appear in exactly one contig (including repeats).
+    expected = Counter((u, v) for u, ns in graph.items() for v in ns)
+    actual = Counter()
+    for piece in pieces:
+        piece_graph = debruijn_graph(kmer_composition(piece, k))
+        actual.update((u, v) for u, ns in piece_graph.items() for v in ns)
+    assert actual == expected
+    assert sum(len(piece) - k + 1 for piece in pieces) == len(kmers)
+    assert graph == original
+    assert pieces == contigs(debruijn_graph(kmers[::-1]))
+    return pieces
+
+
+def test_task4():
+    print('\n_________________TASK 4_____________________')
+    toy_c = ['ATC', 'CCT', 'CTT', 'GGT', 'GTA', 'GTG',
+             'TAT', 'TCT', 'TGG', 'TGT', 'TTG']
+    graph_c = debruijn_graph(toy_c)
+
+    print('\nToy C - Hierholzer trace:')
+    walk_c = eulerian_path(graph_c, verbose=True)
+    genome = spell_path(walk_c)
+    assert genome == 'CCTTGTGGTATCT'
+    assert check_eulerian_walk(graph_c, toy_c) == walk_c
+    print('Toy C genome:', genome)
+
+    print('\nToy C contigs:')
+    pieces = check_contigs(graph_c, toy_c)
+    expected = ['CCT', 'CTTG', 'GTATCT', 'GTG', 'TGGT', 'TGT']
+    assert pieces == expected
+    for piece in pieces:
+        print(' ', piece)
+    print('Toy C:', len(pieces), 'contigs,', len(toy_c), 'edges covered')
+
+    # A string with no repeated (k-1)-mer: one contig, the string itself.
+    text = 'GATTACA'
+    kmers = kmer_composition(text, 3)
+    assert check_contigs(debruijn_graph(kmers), kmers) == [text]
+
+    # A single 1-in-1-out cycle: one contig, starting at min node.
+    text = 'ACGTTGCAAC'
+    kmers = kmer_composition(text, 3)
+    cycle_pieces = check_contigs(debruijn_graph(kmers), kmers)
+    assert len(cycle_pieces) == 1
+    assert len(cycle_pieces[0]) == len(text)
+    assert cycle_pieces[0][:2] == min(debruijn_graph(kmers))
+
+
+    kmers = ['AAB', 'AAB']
+    assert check_contigs(debruijn_graph(kmers), kmers) == ['AAB', 'AAB']
+
+    kmers = ['ABC', 'BCD', 'XYX', 'YXY']
+    assert check_contigs(debruijn_graph(kmers), kmers) == ['ABCD', 'XYXY']
+
+    print('Task 4 tests passed!')
 
 
 if __name__ == '__main__':
     test_task2()
     test_task3()
+    test_task4()
+
+# Task 5: A mystery genome
+
+def read_fasta_kmers(filename, k):
+    """Collect distinct k-mers from all FASTA reads."""
+    from Bio import SeqIO
+
+    kmers = set()
+    read_count = 0
+    for record in SeqIO.parse(filename, 'fasta'):
+        read_count += 1
+        sequence = str(record.seq).upper()
+        kmers.update(kmer_composition(sequence, k))
+    if read_count == 0 or not kmers:
+        raise ValueError('No reads or no k-mers found in ' + filename)
+    return sorted(kmers)
+
+
+def trim_cycle(sequence, k):
+
+    overlap = k - 1
+    if sequence[:overlap] == sequence[-overlap:]:
+        return sequence[:-overlap]
+    return sequence
+
+
+def same_circle(s, t):
+    return len(s) == len(t) and s in (t + t)
+
+
+def check_task5_contigs(graph, pieces, k):
+
+    expected = Counter((u, v) for u, ns in graph.items() for v in ns)
+    actual = Counter()
+    for piece in pieces:
+        for kmer in kmer_composition(piece, k):
+            actual[(kmer[:-1], kmer[1:])] += 1
+    assert actual == expected
+
+
+def task5(filename='reads.fasta'):
+    from pathlib import Path
+
+    if not Path(filename).is_file():
+        raise FileNotFoundError(
+            f'Cannot find {filename}. Put reads.fasta next to assembly_exercise.py '
+            'or pass the full path to task5().'
+        )
+
+    print('\n_________________TASK 5_____________________')
+    results = []
+
+    for k in [9, 12, 13, 14, 21]:
+        kmers = read_fasta_kmers(filename, k)
+        kmer_set = set(kmers)
+        graph = debruijn_graph(kmers)
+        node_count = len(graph)
+        edge_count = sum(len(ns) for ns in graph.values())
+        kind = eulerian_type(graph, directed=True)
+        assert edge_count == len(kmer_set)
+
+        pieces = contigs(graph)
+        check_task5_contigs(graph, pieces, k)
+        trimmed_pieces = [trim_cycle(piece, k) for piece in pieces]
+        longest = max(map(len, trimmed_pieces), default=0)
+
+        spelled = None
+        if kind != 'none':
+            original = {u: ns.copy() for u, ns in graph.items()}
+            walk = eulerian_path(graph)
+            full_string = spell_path(walk)
+
+            # Self-checks BEFORE trimming (as requested by the README).
+            assert len(walk) == edge_count + 1
+            assert len(full_string) == edge_count + k - 1
+            assert set(kmer_composition(full_string, k)) == kmer_set
+            assert Counter(zip(walk, walk[1:])) == Counter(
+                (u, v) for u, ns in graph.items() for v in ns
+            )
+            assert graph == original
+
+            if kind == 'circuit':
+                assert walk[0] == walk[-1]
+                spelled = trim_cycle(full_string, k)
+            else:
+                spelled = full_string
+
+        results.append({
+            'k': k, 'V': node_count, 'E': edge_count,
+            'type': kind, 'contigs': len(pieces),
+            'longest': longest, 'spelled': spelled,
+            'pieces': trimmed_pieces,
+        })
+
+    print('k   |V|    |E|    type      contigs  longest  spelled length')
+    print('-' * 68)
+    for r in results:
+        spelled_len = str(len(r['spelled'])) if r['spelled'] is not None else '-'
+        print(f"{r['k']:<3} {r['V']:<6} {r['E']:<6} {r['type']:<9} "
+              f"{r['contigs']:<8} {r['longest']:<8} {spelled_len}")
+
+    print('\nCircular sequence comparison:')
+    spelled_results = [r for r in results if r['spelled'] is not None]
+    for i, first in enumerate(spelled_results):
+        for second in spelled_results[i + 1:]:
+            equal = same_circle(first['spelled'], second['spelled'])
+            print(f"k={first['k']} vs k={second['k']}: "
+                  f"{'same circle' if equal else 'DIFFERENT circles'}")
+
+
+    first_single = next((r for r in results if r['contigs'] == 1), None)
+    blast_queries = []
+    if first_single is not None:
+        blast_queries.append((
+            f"single_contig_k{first_single['k']}", first_single['pieces'][0]
+        ))
+        for r in results:
+            if r['k'] < first_single['k'] and r['spelled'] is not None:
+                blast_queries.append((f"spelled_k{r['k']}", r['spelled']))
+
+    if blast_queries:
+        output = Path(filename).with_name('blast_queries.fasta')
+        with output.open('w') as f:
+            for name, sequence in blast_queries:
+                f.write(f'>{name}\n')
+                for i in range(0, len(sequence), 80):
+                    f.write(sequence[i:i+80] + '\n')
+        print(f'\nBLAST queries saved to: {output}')
+    else:
+        print('\nNo single contig found at the tested k values.')
+
+    print('Task 5 checks passed!')
+    return results
+
+
+if __name__ == '__main__':
+    from pathlib import Path
+    fasta = Path(__file__).with_name('reads.fasta')
+    if fasta.exists():
+        task5(str(fasta))
+    else:
+        print('\nTask 5 not run: reads.fasta is not next to this script.')
