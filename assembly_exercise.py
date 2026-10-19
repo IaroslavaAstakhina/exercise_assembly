@@ -182,5 +182,118 @@ def _shadow(graph):
     return shadow
 
 
+
+
+# Task 3: Hierholzer's algorithm (walks and splicing)
+
+def hierholzer(graph, start, verbose=False):
+    # Work on a copy: keep the original adjacency lists unchanged.
+    unused = {node: sorted(neighbors) for node, neighbors in graph.items()}
+
+    def make_walk(node):
+        walk = [node]
+        while unused[node]:
+            next_node = unused[node].pop(0)  # Alphabetically first unused edge
+            walk.append(next_node)
+            node = next_node
+        return walk
+
+    result = make_walk(start)
+    if verbose:
+        print('Walk 1:', ' -> '.join(result))
+
+    walk_number = 1
+    while any(unused.values()):
+        # Find the first POSITION in the current spliced walk with unused edges.
+        for position, node in enumerate(result):
+            if unused[node]:
+                break
+        else:
+            raise ValueError('Unused edges are not reachable from the walk')
+
+        new_walk = make_walk(node)
+        walk_number += 1
+        if verbose:
+            print(f'Walk {walk_number} (restart at {node}):',
+                  ' -> '.join(new_walk))
+
+        # Replace only the selected occurrence of the restart node.
+        result = result[:position] + new_walk + result[position + 1:]
+        if verbose:
+            print('After splice:', ' -> '.join(result))
+
+    return result
+
+
+def eulerian_path(graph, verbose=False):
+    kind = eulerian_type(graph, directed=True)
+    if kind == 'none':
+        raise ValueError('Graph has no Eulerian path')
+
+    if kind == 'path':
+        incoming, outgoing = in_out_degree(graph)
+        start = next(node for node in graph
+                     if outgoing[node] - incoming[node] == 1)
+    else:
+        start = min(graph)
+
+    return hierholzer(graph, start, verbose)
+
+
+def check_eulerian_walk(graph, kmers):
+    original = {node: neighbors.copy() for node, neighbors in graph.items()}
+    walk = eulerian_path(graph)
+    edge_count = sum(len(neighbors) for neighbors in graph.values())
+
+    # 1. Exactly E + 1 nodes.
+    assert len(walk) == edge_count + 1
+
+    # 2. Every edge, including parallel edges, used exactly once.
+    expected_edges = Counter((u, v) for u, ns in graph.items() for v in ns)
+    actual_edges = Counter(zip(walk, walk[1:]))
+    assert actual_edges == expected_edges
+
+    # 3. Reconstructed string contains exactly the input k-mers.
+    assert Counter(kmer_composition(spell_path(walk), len(kmers[0]))) == Counter(kmers)
+
+    # 4. Original graph is unchanged.
+    assert graph == original
+
+    # 6. Reversing input k-mers must not change the walk.
+    reversed_graph = debruijn_graph(kmers[::-1])
+    assert eulerian_path(reversed_graph) == walk
+    return walk
+
+
+def test_task3():
+    toy_a = ['ACT', 'AGA', 'CAG', 'CCA', 'CTG', 'GAA',
+             'GAC', 'GGT', 'GTC', 'TCC', 'TGA']
+    toy_b = ['ACT', 'AGC', 'ATT', 'CCG', 'CGA', 'CGT', 'CTG',
+             'GAC', 'GAG', 'GAT', 'GTC', 'TCC', 'TCG', 'TGA', 'TTC']
+
+    walk_a = check_eulerian_walk(debruijn_graph(toy_a), toy_a)
+    assert spell_path(walk_a) == 'GGTCCAGACTGAA'
+
+    graph_b = debruijn_graph(toy_b)
+    print('_________________TASK 3_____________________')
+    print('\nToy B - Hierholzer trace:')
+    walk_b = eulerian_path(graph_b, verbose=True)
+    expected_b = ['GA', 'AT', 'TT', 'TC', 'CG', 'GT', 'TC', 'CC',
+                  'CG', 'GA', 'AC', 'CT', 'TG', 'GA', 'AG', 'GC']
+    assert walk_b == expected_b
+    assert check_eulerian_walk(graph_b, toy_b) == expected_b
+    assert spell_path(walk_b) == 'GATTCGTCCGACTGAGC'
+
+    # Extra examples: parallel edges, cycles, and repeated k-mers.
+    for text, k in [('CATCATCAT', 3), ('ATATA', 2),
+                    ('AAAAAA', 3), ('GATTACA', 4)]:
+        kmers = kmer_composition(text, k)
+        check_eulerian_walk(debruijn_graph(kmers), kmers)
+
+    print('Toy B genome:', spell_path(walk_b))
+    print('Task 3 tests passed!')
+
+
 if __name__ == '__main__':
     test_task2()
+    test_task3()
